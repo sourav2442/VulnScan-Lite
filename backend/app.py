@@ -1,14 +1,31 @@
-from flask import Flask
+from flask import Flask, request, jsonify
+from scanner.header_checker import check_headers
 
 app = Flask(__name__)
+
 
 @app.route("/")
 def home():
     return {
         "project": "VulnScan Lite",
-        "status": "Running",
-        "version": "1.0"
+        "status": "Running"
     }
+
+
+@app.route("/scan")
+def scan():
+
+    url = request.args.get("url")
+
+    if not url:
+        return jsonify({
+            "error": "Please provide a URL."
+        }), 400
+
+    result = check_headers(url)
+
+    return jsonify(result)
+
 
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port=5001, debug=True)
