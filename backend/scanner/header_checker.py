@@ -1,22 +1,13 @@
 import requests
 
-SECURITY_HEADERS = [
-    "Content-Security-Policy",
-    "X-Frame-Options",
-    "Strict-Transport-Security",
-    "X-Content-Type-Options",
-    "Referrer-Policy",
-    "Permissions-Policy"
-]
+from scanner.header_data import SECURITY_HEADERS
+from scanner.scoring import calculate_score
 
 
 def check_headers(url):
-    """
-    Checks whether common security headers are present.
-    Returns a dictionary containing the scan results.
-    """
 
     try:
+
         response = requests.get(
             url,
             timeout=10,
@@ -26,18 +17,51 @@ def check_headers(url):
             }
         )
 
-        results = {
+        passed = []
+        failed = []
+
+        for header, info in SECURITY_HEADERS.items():
+
+            if header in response.headers:
+
+                passed.append({
+                    "header": header,
+                    "severity": info["severity"],
+                    "description": info["description"]
+                })
+
+            else:
+
+                failed.append({
+                    "header": header,
+                    "severity": info["severity"],
+                    "description": info["description"],
+                    "recommendation": info["recommendation"]
+                })
+
+        score, grade = calculate_score(
+            len(passed),
+            len(SECURITY_HEADERS)
+        )
+
+        return {
+
             "url": response.url,
+
             "status_code": response.status_code,
-            "headers": {}
+
+            "score": score,
+
+            "grade": grade,
+
+            "passed_checks": passed,
+
+            "failed_checks": failed
+
         }
 
-        for header in SECURITY_HEADERS:
-            results["headers"][header] = header in response.headers
-
-        return results
-
     except requests.exceptions.RequestException as e:
+
         return {
             "error": str(e)
         }
