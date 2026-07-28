@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from scanner.header_checker import check_headers
+from scanner.scanner_engine import run_scan
 
 app = Flask(__name__)
 
@@ -22,8 +22,7 @@ def scan():
             "error": "Please provide a URL."
         }), 400
 
-    result = check_headers(url)
-
+    result = run_scan(url)
     return jsonify(result)
 
 
