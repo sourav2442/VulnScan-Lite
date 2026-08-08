@@ -1,0 +1,302 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #f4f7fb;
+  color: #172033;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app {
+  min-height: 100vh;
+}
+
+.header {
+  background: #101828;
+  color: white;
+  padding: 30px 20px;
+  text-align: center;
+}
+
+.logo {
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.subtitle {
+  margin-top: 8px;
+  color: #b9c2d0;
+}
+
+.container {
+  width: min(1000px, 92%);
+  margin: 35px auto;
+}
+
+.disclaimer {
+  background: #fff7e6;
+  border: 1px solid #f2d28b;
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 25px;
+}
+
+.disclaimer strong {
+  font-size: 17px;
+}
+
+.disclaimer p {
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+.scanner-card,
+.results {
+  background: white;
+  border-radius: 14px;
+  padding: 30px;
+  box-shadow: 0 5px 25px rgba(16, 24, 40, 0.08);
+  margin-bottom: 25px;
+}
+
+.scanner-card h1,
+.results h2 {
+  margin-top: 0;
+}
+
+.description {
+  color: #667085;
+}
+
+.scanner-card label {
+  display: block;
+  margin: 25px 0 8px;
+  font-weight: 600;
+}
+
+.scan-form {
+  display: flex;
+  gap: 12px;
+}
+
+.scan-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #cfd6e0;
+  border-radius: 8px;
+  outline: none;
+}
+
+.scan-form input:focus {
+  border-color: #344054;
+}
+
+.scan-form button {
+  padding: 14px 24px;
+  border: none;
+  border-radius: 8px;
+  background: #101828;
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.scan-form button:hover {
+  background: #344054;
+}
+
+.scan-form button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.scan-id {
+  margin-top: 15px;
+  color: #667085;
+  font-size: 13px;
+}
+
+.status {
+  margin-top: 18px;
+  padding: 12px;
+  background: #eef4ff;
+  border-radius: 8px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.error {
+  margin-top: 18px;
+  padding: 12px;
+  background: #fff0f0;
+  border: 1px solid #f3b4b4;
+  border-radius: 8px;
+  color: #b42318;
+}
+
+.score-card {
+  text-align: center;
+  padding: 30px;
+  background: #f8fafc;
+  border-radius: 12px;
+  margin: 20px 0;
+}
+
+.score-card h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  font-size: 22px;
+}
+
+.grade {
+  font-size: 24px;
+  margin-top: 5px;
+}
+
+.risk {
+  margin-top: 8px;
+  color: #667085;
+  font-size: 16px;
+}
+
+.score {
+  font-size: 64px;
+  font-weight: 700;
+}
+
+.score span {
+  font-size: 22px;
+  color: #667085;
+}
+
+.grade {
+  font-size: 24px;
+  margin-top: 8px;
+}
+
+.risk {
+  margin-top: 8px;
+  color: #667085;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 15px;
+  margin: 25px 0;
+}
+
+.summary-card {
+  border: 1px solid #eaecf0;
+  border-radius: 10px;
+  padding: 20px;
+  text-align: center;
+}
+
+.summary-card span {
+  display: block;
+  color: #667085;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.summary-card strong {
+  font-size: 22px;
+}
+
+.report-section {
+  margin-top: 30px;
+}
+
+.report-section h3 {
+  border-bottom: 1px solid #eaecf0;
+  padding-bottom: 10px;
+}
+
+.check {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+.check p {
+  margin: 7px 0;
+  color: #667085;
+}
+
+.check span {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.passed {
+  background: #ecfdf3;
+  border: 1px solid #abefc6;
+}
+
+.failed {
+  background: #fff6ed;
+  border: 1px solid #f9dbaf;
+}
+
+.recommendation {
+  margin-top: 12px;
+  padding: 12px;
+  background: white;
+  border-radius: 6px;
+}
+
+.ssl-info {
+  background: #f8fafc;
+  padding: 18px;
+  border-radius: 8px;
+}
+
+.ssl-info p {
+  margin: 8px 0;
+}
+
+.recommendation-box {
+  margin-top: 30px;
+  padding: 20px;
+  background: #eef4ff;
+  border-radius: 10px;
+}
+
+.recommendation-box p {
+  margin-bottom: 0;
+}
+
+footer {
+  text-align: center;
+  padding: 30px;
+  color: #667085;
+  font-size: 14px;
+}
+
+@media (max-width: 700px) {
+  .scan-form {
+    flex-direction: column;
+  }
+
+  .summary-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .scanner-card,
+  .results {
+    padding: 20px;
+  }
+}
