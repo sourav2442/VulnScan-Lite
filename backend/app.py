@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from rq.job import Job
+from urllib.parse import urlparse
 
 from rq_queue import scan_queue
 
@@ -18,6 +19,36 @@ def home():
         "status": "Running",
         "version": "1.0"
     })
+
+
+def validate_url(url):
+    """
+    Validate that the supplied value is a proper HTTP/HTTPS URL.
+    """
+
+    if not url:
+        return False, "URL cannot be empty."
+
+    url = str(url).strip()
+
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False, "Invalid URL."
+
+    # Only allow HTTP and HTTPS.
+    if parsed.scheme not in ("http", "https"):
+        return False, "URL must start with http:// or https://."
+
+    # A hostname is required.
+    if not parsed.netloc:
+        return False, "Please provide a valid website URL."
+
+    # Reject URLs such as https://
+    if not parsed.hostname:
+        return False, "Please provide a valid website hostname."
+
+    return True, url
 
 
 @app.route("/scan", methods=["POST"])
@@ -41,10 +72,13 @@ def start_scan():
 
     url = str(data["url"]).strip()
 
-    if not url:
+    # Validate URL before adding it to the queue.
+    valid, message = validate_url(url)
+
+    if not valid:
         return jsonify({
             "success": False,
-            "error": "URL cannot be empty."
+            "error": message
         }), 400
 
     # Add the scan task to the RQ queue.

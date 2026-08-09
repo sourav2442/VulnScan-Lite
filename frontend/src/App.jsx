@@ -45,10 +45,19 @@ function App() {
 
       checkScanStatus(data.scan_id);
     } catch (err) {
-      setError(err.message || "Failed to connect to the scanner.");
+      console.error("Scan error:", err);
+
+      if (err instanceof TypeError && err.message === "Failed to fetch") {
+        setError(
+          "Unable to connect to VulnScan Lite backend. Please make sure the scanner server is running."
+        );
+      } else {
+        setError(
+          err.message || "Unable to start the security scan."
+        );
+      }
+
       setStatus("");
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -67,39 +76,58 @@ function App() {
       }
 
       if (data.status === "queued") {
+        setLoading(true);
         setStatus("Scan queued...");
         setTimeout(() => checkScanStatus(id), 2000);
         return;
       }
 
       if (data.status === "started") {
+        setLoading(true);
         setStatus("Scanning website...");
         setTimeout(() => checkScanStatus(id), 2000);
         return;
       }
 
       if (data.status === "finished") {
+        setLoading(false);
         setResult(data.result);
         setStatus("Scan completed successfully.");
         return;
       }
 
       if (data.status === "failed") {
+        setLoading(false);
         setError(data.error || "Scan failed.");
         setStatus("");
         return;
       }
 
+      setLoading(true);
       setStatus(`Scan status: ${data.status}`);
       setTimeout(() => checkScanStatus(id), 2000);
+
     } catch (err) {
-      setError(
-        err.message || "Failed to check scan status."
-      );
+      console.error("Status check error:", err);
+
+      setLoading(false);
+
+      if (
+        err instanceof TypeError &&
+        err.message === "Failed to fetch"
+      ) {
+        setError(
+          "Lost connection to the VulnScan Lite backend. Please make sure the scanner server is running."
+        );
+      } else {
+        setError(
+          err.message || "Unable to check scan status."
+        );
+      }
+
       setStatus("");
     }
   };
-
   const getRiskClass = (riskLevel) => {
     if (!riskLevel) {
       return "medium";
