@@ -1,141 +1,221 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from rq.job import Job
-from urllib.parse import urlparse
+from celery.result import AsyncResult
+from celery_app import celery
+from tasks.scan_tasks import scan_website
 
-from rq_queue import scan_queue
+from scanner.url_validator import validate_and_normalize_url
+
+
+# =========================================================
+# FLASK APPLICATION
+# =========================================================
 
 app = Flask(__name__)
 
-# Allow the React frontend running on port 5173
-# to communicate with the Flask backend.
+# Allow the React frontend to communicate with Flask
 CORS(app)
 
+
+# =========================================================
+# HOME ROUTE
+# =========================================================
 
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
-        "project": "VulnScan Lite",
-        "status": "Running",
-        "version": "1.0"
+        "success": True,
+        "message": "VulnScan Lite API is running.",
+        "service": "Passive Web Vulnerability Scanner"
     })
 
 
-def validate_url(url):
-    """
-    Validate that the supplied value is a proper HTTP/HTTPS URL.
-    """
-
-    if not url:
-        return False, "URL cannot be empty."
-
-    url = str(url).strip()
-
-    try:
-        parsed = urlparse(url)
-    except Exception:
-        return False, "Invalid URL."
-
-    # Only allow HTTP and HTTPS.
-    if parsed.scheme not in ("http", "https"):
-        return False, "URL must start with http:// or https://."
-
-    # A hostname is required.
-    if not parsed.netloc:
-        return False, "Please provide a valid website URL."
-
-    # Reject URLs such as https://
-    if not parsed.hostname:
-        return False, "Please provide a valid website hostname."
-
-    return True, url
-
+# =========================================================
+# START SCAN
+# =========================================================
 
 @app.route("/scan", methods=["POST"])
 def start_scan():
-    """
-    Start a new vulnerability scan.
-
-    Expected JSON:
-    {
-        "url": "https://example.com"
-    }
-    """
-
-    data = request.get_json(silent=True)
-
-    if not data or "url" not in data:
-        return jsonify({
-            "success": False,
-            "error": "Please provide a URL."
-        }), 400
-
-    url = str(data["url"]).strip()
-
-    # Validate URL before adding it to the queue.
-    valid, message = validate_url(url)
-
-    if not valid:
-        return jsonify({
-            "success": False,
-            "error": message
-        }), 400
-
-    # Add the scan task to the RQ queue.
-    job = scan_queue.enqueue(
-        "tasks.scan_tasks.scan_website",
-        url
-    )
-
-    return jsonify({
-        "success": True,
-        "scan_id": job.id,
-        "status": "queued"
-    }), 202
-
-
-@app.route("/scan/<job_id>/status", methods=["GET"])
-def scan_status(job_id):
-    """
-    Return the current status/result of a scan.
-    """
 
     try:
-        job = Job.fetch(
-            job_id,
-            connection=scan_queue.connection
+
+        # -------------------------------------------------
+        # Read JSON request
+        # -------------------------------------------------
+
+        data = request.get_json(silent=True) or {}
+
+        url = data.get("url", "")
+
+        # -------------------------------------------------
+        # Validate and normalize URL
+        # -------------------------------------------------
+
+        normalized_url, validation_error = (
+            validate_and_normalize_url(url)
         )
 
-    except Exception:
+        if validation_error:
+
+            return jsonify({
+                "success": False,
+                "error": validation_error
+            }), 400
+
+        # -------------------------------------------------
+        # Create background scan job
+        # -------------------------------------------------
+
+        task = scan_website.delay(normalized_url)
+
+        # -------------------------------------------------
+        # Return scan ID
+        # -------------------------------------------------
+
+        return jsonify({
+            "success": True,
+            "scan_id": task.id,
+            "status": "queued"
+        }), 200
+
+    except Exception as e:
+
+        print("START SCAN ERROR:", repr(e))
+
         return jsonify({
             "success": False,
-            "error": "Scan job not found."
-        }), 404
+            "error": "Unable to start the scan."
+        }), 500
 
-    status = job.get_status()
 
-    response = {
-        "success": True,
-        "scan_id": job.id,
-        "status": status
-    }
+# =========================================================
+# SCAN STATUS
+# =========================================================
 
-    # RQ uses "finished" when the job completed successfully.
-    if status == "finished":
-        response["result"] = job.result
+@app.route("/scan/<scan_id>/status", methods=["GET"])
+def scan_status(scan_id):
 
-    # RQ uses "failed" when the task raised an exception.
-    elif status == "failed":
-        response["error"] = (
-            str(job.exc_info)
-            if job.exc_info
-            else "Scan failed."
-        )
+    try:
 
-    return jsonify(response), 200
+        # -------------------------------------------------
+        # Get Celery task
+        # -------------------------------------------------
 
+        task = AsyncResult(scan_id, app=celery)
+
+        # -------------------------------------------------
+        # Task completed
+        # -------------------------------------------------
+
+        if task.successful():
+
+            result = task.result
+
+            # Safety check
+            if not isinstance(result, dict):
+
+                return jsonify({
+                    "success": False,
+                    "status": "failed",
+                    "error": "Invalid scan result returned by worker."
+                }), 500
+
+            # Scanner itself may report success=False
+            if result.get("success") is False:
+
+                return jsonify({
+                    "success": False,
+                    "status": "failed",
+                    "error": result.get(
+                        "error",
+                        "Scan failed."
+                    )
+                }), 200
+
+            return jsonify({
+                "success": True,
+                "status": "completed",
+                "result": result
+            }), 200
+
+        # -------------------------------------------------
+        # Task failed
+        # -------------------------------------------------
+
+        if task.failed():
+
+            return jsonify({
+                "success": False,
+                "status": "failed",
+                "error": "Scan worker failed."
+            }), 500
+
+        # -------------------------------------------------
+        # Task is still running
+        # -------------------------------------------------
+
+        if task.state in ("PENDING", "RECEIVED"):
+
+            return jsonify({
+                "success": True,
+                "status": "queued"
+            }), 200
+
+        if task.state in ("STARTED", "RETRY"):
+
+            return jsonify({
+                "success": True,
+                "status": "running"
+            }), 200
+
+        # -------------------------------------------------
+        # Unknown Celery state
+        # -------------------------------------------------
+
+        return jsonify({
+            "success": True,
+            "status": task.state.lower()
+        }), 200
+
+    except Exception as e:
+
+        print("SCAN STATUS ERROR:", repr(e))
+
+        return jsonify({
+            "success": False,
+            "status": "failed",
+            "error": "Unable to retrieve scan status."
+        }), 500
+
+
+# =========================================================
+# ERROR HANDLERS
+# =========================================================
+
+@app.errorhandler(404)
+def not_found(error):
+
+    return jsonify({
+        "success": False,
+        "error": "API endpoint not found."
+    }), 404
+
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+
+    return jsonify({
+        "success": False,
+        "error": "HTTP method not allowed."
+    }), 405
+
+
+# =========================================================
+# RUN APPLICATION
+# =========================================================
 
 if __name__ == "__main__":
+
     app.run(
         host="127.0.0.1",
         port=5001,

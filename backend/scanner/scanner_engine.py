@@ -139,7 +139,13 @@ def run_scan(url: str) -> dict:
 
         "overall_score": overall_score,
 
-        "grade": header_result["grade"],
+        "grade": (
+    		"A" if overall_score >= 90 else
+    		"B" if overall_score >= 80 else
+    		"C" if overall_score >= 70 else
+    		"D" if overall_score >= 60 else
+    		"F"
+	),
 
         "risk_level": risk_level,
 
