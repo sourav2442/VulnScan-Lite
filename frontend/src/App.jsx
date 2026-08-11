@@ -1,30 +1,32 @@
 import { useState } from "react";
 import "./App.css";
 
-const API_URL = "http://127.0.0.1:5001";
+const API_BASE = "http://127.0.0.1:5001";
 
 function App() {
   const [url, setUrl] = useState("");
-  const [scanId, setScanId] = useState(null);
+  const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState(null);
-  const [status, setStatus] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
 
-  const startScan = async () => {
+  // =========================================================
+  // START SCAN
+  // =========================================================
+
+  const startScan = async (e) => {
+    e.preventDefault();
+
     if (!url.trim()) {
       setError("Please enter a website URL.");
       return;
     }
 
-    setLoading(true);
-    setError("");
+    setScanning(true);
     setResult(null);
-    setScanId(null);
-    setStatus("Starting scan...");
+    setError("");
 
     try {
-      const response = await fetch(`${API_URL}/scan`, {
+      const response = await fetch(`${API_BASE}/scan`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -36,143 +38,195 @@ function App() {
 
       const data = await response.json();
 
+      console.log("SCAN START RESPONSE:", data);
+
       if (!response.ok || !data.success) {
-        throw new Error(data.error || "Failed to start scan.");
+        throw new Error(
+          data.error || "Unable to start scan."
+        );
       }
 
-      setScanId(data.scan_id);
-      setStatus("Scan queued...");
+      const scanId = data.scan_id;
 
-      checkScanStatus(data.scan_id);
+      if (!scanId) {
+        throw new Error(
+          "Server did not return a scan ID."
+        );
+      }
+
+      console.log("SCAN ID:", scanId);
+
+      await pollScanStatus(scanId);
+
     } catch (err) {
-      console.error("Scan error:", err);
+      console.error("SCAN ERROR:", err);
 
-      if (err instanceof TypeError && err.message === "Failed to fetch") {
-        setError(
-          "Unable to connect to VulnScan Lite backend. Please make sure the scanner server is running."
-        );
-      } else {
-        setError(
-          err.message || "Unable to start the security scan."
-        );
-      }
-
-      setStatus("");
-    }
-  };
-
-  const checkScanStatus = async (id) => {
-    try {
-      const response = await fetch(
-        `${API_URL}/scan/${id}/status`
+      setError(
+        err.message || "Something went wrong."
       );
 
-      const data = await response.json();
+      setScanning(false);
+    }
+  };
 
-      if (!response.ok || data.success === false) {
-        throw new Error(
-          data.error || "Unable to check scan status."
+
+  // =========================================================
+  // POLL SCAN STATUS
+  // =========================================================
+
+  const pollScanStatus = async (scanId) => {
+    let attempts = 0;
+
+    // 60 attempts × 1 second = 60 seconds
+    const maxAttempts = 60;
+
+    const checkStatus = async () => {
+      try {
+        const response = await fetch(
+          `${API_BASE}/scan/${scanId}/status`,
+          {
+            method: "GET",
+            headers: {
+              "Accept": "application/json",
+            },
+          }
         );
-      }
 
-      if (data.status === "queued") {
-        setLoading(true);
-        setStatus("Scan queued...");
-        setTimeout(() => checkScanStatus(id), 2000);
-        return;
-      }
+        const data = await response.json();
 
-      if (data.status === "started") {
-        setLoading(true);
-        setStatus("Scanning website...");
-        setTimeout(() => checkScanStatus(id), 2000);
-        return;
-      }
+        console.log(
+          `SCAN STATUS [${attempts + 1}]:`,
+          data
+        );
 
-      if (data.status === "finished") {
-        setLoading(false);
-        setResult(data.result);
-        setStatus("Scan completed successfully.");
-        return;
-      }
+        if (!response.ok) {
+          throw new Error(
+            data.error ||
+            "Unable to check scan status."
+          );
+        }
 
-      if (data.status === "failed") {
-        setLoading(false);
-        setError(data.error || "Scan failed.");
-        setStatus("");
-        return;
-      }
 
-      setLoading(true);
-      setStatus(`Scan status: ${data.status}`);
-      setTimeout(() => checkScanStatus(id), 2000);
+        // =====================================================
+        // IMPORTANT:
+        // Backend may return the completed result directly
+        // without status = "completed".
+        //
+        // Your PowerShell response showed:
+        //
+        // {
+        //   result: {
+        //      grade: "A",
+        //      overall_score: 87,
+        //      ...
+        //   }
+        // }
+        //
+        // So we check for data.result first.
+        // =====================================================
 
-    } catch (err) {
-      console.error("Status check error:", err);
+        if (
+          data.result &&
+          typeof data.result === "object"
+        ) {
+          console.log(
+            "SCAN COMPLETED - RESULT RECEIVED:",
+            data.result
+          );
 
-      setLoading(false);
+          setResult(data.result);
+          setScanning(false);
+          setError("");
 
-      if (
-        err instanceof TypeError &&
-        err.message === "Failed to fetch"
-      ) {
+          return;
+        }
+
+
+        // =====================================================
+        // Some backend versions may return the scan result
+        // directly instead of inside "result".
+        // =====================================================
+
+        if (
+          data.success === true &&
+          data.overall_score !== undefined
+        ) {
+          console.log(
+            "SCAN COMPLETED - DIRECT RESULT:",
+            data
+          );
+
+          setResult(data);
+          setScanning(false);
+          setError("");
+
+          return;
+        }
+
+
+        // =====================================================
+        // FAILED
+        // =====================================================
+
+        if (
+          data.status === "failed" ||
+          data.success === false
+        ) {
+          throw new Error(
+            data.error ||
+            "Scan failed."
+          );
+        }
+
+
+        // =====================================================
+        // STILL RUNNING
+        // =====================================================
+
+        attempts++;
+
+        if (attempts >= maxAttempts) {
+          throw new Error(
+            "Scan timed out. Please try again."
+          );
+        }
+
+        setTimeout(checkStatus, 1000);
+
+      } catch (err) {
+        console.error(
+          "STATUS ERROR:",
+          err
+        );
+
         setError(
-          "Lost connection to the VulnScan Lite backend. Please make sure the scanner server is running."
+          err.message ||
+          "Unable to retrieve scan result."
         );
-      } else {
-        setError(
-          err.message || "Unable to check scan status."
-        );
+
+        setScanning(false);
       }
+    };
 
-      setStatus("");
-    }
-  };
-  const getRiskClass = (riskLevel) => {
-    if (!riskLevel) {
-      return "medium";
-    }
-
-    const risk = String(riskLevel).toLowerCase();
-
-    if (risk.includes("low")) {
-      return "low";
-    }
-
-    if (risk.includes("critical")) {
-      return "critical";
-    }
-
-    if (risk.includes("high")) {
-      return "high";
-    }
-
-    return "medium";
+    checkStatus();
   };
 
-  const getGaugeRotation = (score) => {
-    const safeScore = Math.max(
-      0,
-      Math.min(100, Number(score) || 0)
-    );
 
-    /*
-      0   = -90 degrees
-      50  = 0 degrees
-      100 = 90 degrees
-    */
-
-    return -90 + safeScore * 1.8;
-  };
+  // =========================================================
+  // RESET
+  // =========================================================
 
   const resetScan = () => {
     setUrl("");
-    setScanId(null);
     setResult(null);
-    setStatus("");
     setError("");
-    setLoading(false);
+    setScanning(false);
   };
+
+
+  // =========================================================
+  // RESULT DATA
+  // =========================================================
 
   const passedChecks =
     result?.headers?.passed_checks || [];
@@ -180,18 +234,26 @@ function App() {
   const failedChecks =
     result?.headers?.failed_checks || [];
 
-  const summary = result?.summary || {};
+  const ssl =
+    result?.ssl || {};
 
-  const ssl = result?.ssl || {};
+  const cms =
+    result?.cms || {};
 
-  const cms = result?.cms || {};
+  const summary =
+    result?.summary || {};
+
+
+  // =========================================================
+  // MAIN UI
+  // =========================================================
 
   return (
     <div className="app">
 
-      {/* =========================
+      {/* =====================================================
           HEADER
-      ========================= */}
+      ===================================================== */}
 
       <header className="topbar">
 
@@ -202,11 +264,19 @@ function App() {
           </div>
 
           <div className="brand-text">
-            <h1>VulnScan Lite</h1>
-            <p>Web Security Scanner</p>
+
+            <h1>
+              VulnScan Lite
+            </h1>
+
+            <p>
+              Passive Web Security Scanner
+            </p>
+
           </div>
 
         </div>
+
 
         <div className="status-indicator">
 
@@ -219,95 +289,122 @@ function App() {
       </header>
 
 
-      {/* =========================
+      {/* =====================================================
           MAIN
-      ========================= */}
+      ===================================================== */}
 
       <main className="container">
 
-        {/* =========================
-            HERO / SCAN PAGE
-        ========================= */}
+
+        {/* ===================================================
+            HOME / SCAN SECTION
+        =================================================== */}
 
         {!result && (
+
           <section className="hero-section">
 
             <div className="hero-content">
 
               <span className="hero-badge">
-                PASSIVE SECURITY ANALYSIS
+                WEB SECURITY ANALYSIS
               </span>
 
+
               <h2>
-                Scan your website's
-                <span> security posture.</span>
+
+                Check your website's
+
+                <span>
+                  security posture.
+                </span>
+
               </h2>
 
+
               <p className="hero-description">
-                Enter a website URL to analyze security
-                headers, SSL/TLS configuration, CMS
-                information and overall security risk.
+
+                VulnScan Lite performs passive security
+                checks for HTTP security headers,
+                SSL/TLS configuration and CMS information.
+
               </p>
 
 
-              <div className="scan-form">
+              <form
+                className="scan-form"
+                onSubmit={startScan}
+              >
 
                 <input
-                  type="url"
-                  placeholder="https://example.com"
+                  type="text"
                   value={url}
-                  onChange={(event) =>
-                    setUrl(event.target.value)
+                  onChange={(e) =>
+                    setUrl(e.target.value)
                   }
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      startScan();
-                    }
-                  }}
+                  placeholder="https://example.com"
+                  disabled={scanning}
                 />
 
+
                 <button
-                  onClick={startScan}
-                  disabled={loading}
+                  type="submit"
+                  disabled={scanning}
                 >
-                  {loading
+
+                  {scanning
                     ? "Scanning..."
                     : "Scan Website"}
+
                 </button>
 
-              </div>
+              </form>
 
 
-              {status && (
+              {/* SCANNING */}
+
+              {scanning && (
+
                 <div className="scan-status">
+
                   <span className="loading-dot"></span>
-                  {status}
+
+                  Scanning website. Please wait...
+
                 </div>
+
               )}
 
 
+              {/* ERROR */}
+
               {error && (
+
                 <div className="error-message">
+
                   {error}
+
                 </div>
+
               )}
 
             </div>
 
           </section>
+
         )}
 
 
-        {/* =========================
+        {/* ===================================================
             RESULTS
-        ========================= */}
+        =================================================== */}
 
         {result && (
+
           <section className="results-section">
 
-            {/* =====================
-                RESULTS HEADER
-            ===================== */}
+
+            {/* RESULTS HEADER */}
 
             <div className="results-header">
 
@@ -317,15 +414,18 @@ function App() {
                   SECURITY REPORT
                 </span>
 
+
                 <h2>
                   Security Health Report
                 </h2>
+
 
                 <p className="scanned-url">
                   {result.url}
                 </p>
 
               </div>
+
 
               <button
                 className="new-scan-button"
@@ -337,11 +437,12 @@ function App() {
             </div>
 
 
-            {/* =====================
-                SCORE + RISK
-            ===================== */}
+            {/* =================================================
+                SCORE SECTION
+            ================================================= */}
 
             <div className="score-section">
+
 
               {/* SCORE CARD */}
 
@@ -351,24 +452,38 @@ function App() {
                   OVERALL SECURITY SCORE
                 </div>
 
+
                 <div className="score-number">
+
                   {result.overall_score ?? 0}
-                  <span>/100</span>
+
+                  <span>
+                    /100
+                  </span>
+
                 </div>
+
 
                 <div className="grade">
+
                   Grade {result.grade || "N/A"}
+
                 </div>
 
+
                 <p className="score-description">
+
                   Overall security posture based on
-                  the completed passive checks.
+                  the completed passive security checks.
+
                 </p>
 
               </div>
 
 
-              {/* RISK GAUGE */}
+              {/* =================================================
+                  RISK CARD
+              ================================================= */}
 
               <div className="risk-card">
 
@@ -379,35 +494,40 @@ function App() {
 
                 <div className="modern-gauge">
 
-                  {/* Colored gauge */}
-                  <div className="gauge-background">
+                  <div className="gauge-background"></div>
 
-                    <div className="gauge-inner"></div>
+                  <div className="gauge-inner"></div>
 
-                  </div>
-
-
-                  {/* Gauge tick marks */}
 
                   <div className="gauge-ticks">
 
-                    <span className="tick tick-0"></span>
-                    <span className="tick tick-25"></span>
-                    <span className="tick tick-50"></span>
-                    <span className="tick tick-75"></span>
-                    <span className="tick tick-100"></span>
+                    <div className="tick tick-0"></div>
+
+                    <div className="tick tick-25"></div>
+
+                    <div className="tick tick-50"></div>
+
+                    <div className="tick tick-75"></div>
+
+                    <div className="tick tick-100"></div>
 
                   </div>
 
-
-                  {/* Needle */}
 
                   <div
                     className="gauge-needle"
                     style={{
-                      transform: `rotate(${getGaugeRotation(
-                        result.overall_score
-                      )}deg)`,
+                      transform:
+                        `rotate(${
+                          -90 +
+                          (
+                            (Number(
+                              result.overall_score
+                            ) || 0
+                            ) / 100
+                          ) *
+                          180
+                        }deg)`,
                     }}
                   >
 
@@ -418,16 +538,17 @@ function App() {
                   </div>
 
 
-                  {/* Center score */}
-
                   <div className="gauge-value">
 
                     <div className="gauge-score">
+
                       {result.overall_score ?? 0}
+
                     </div>
 
+
                     <div className="gauge-max">
-                      /100
+                      / 100
                     </div>
 
                   </div>
@@ -435,28 +556,39 @@ function App() {
                 </div>
 
 
-                {/* Risk badge */}
-
                 <div
-                  className={`risk-label ${getRiskClass(
-                    result.risk_level
-                  )}`}
+                  className={
+                    `risk-label ${
+                      (
+                        result.risk_level ||
+                        "critical"
+                      ).toLowerCase()
+                    }`
+                  }
                 >
+
                   {result.risk_level || "Unknown"}
+
                 </div>
 
 
-                {/* Scale */}
-
                 <div className="gauge-scale">
 
-                  <span>Low</span>
+                  <span>
+                    Low
+                  </span>
 
-                  <span>Medium</span>
+                  <span>
+                    Medium
+                  </span>
 
-                  <span>High</span>
+                  <span>
+                    High
+                  </span>
 
-                  <span>Critical</span>
+                  <span>
+                    Critical
+                  </span>
 
                 </div>
 
@@ -465,11 +597,12 @@ function App() {
             </div>
 
 
-            {/* =====================
-                SUMMARY CARDS
-            ===================== */}
+            {/* =================================================
+                SUMMARY
+            ================================================= */}
 
             <div className="summary-grid">
+
 
               <div className="summary-card">
 
@@ -478,12 +611,18 @@ function App() {
                 </div>
 
                 <div>
-                  <span>Passed Checks</span>
+
+                  <span>
+                    Passed Checks
+                  </span>
 
                   <strong>
+
                     {summary.passed_checks ??
                       passedChecks.length}
+
                   </strong>
+
                 </div>
 
               </div>
@@ -496,12 +635,18 @@ function App() {
                 </div>
 
                 <div>
-                  <span>Failed Checks</span>
+
+                  <span>
+                    Failed Checks
+                  </span>
 
                   <strong>
+
                     {summary.failed_checks ??
                       failedChecks.length}
+
                   </strong>
+
                 </div>
 
               </div>
@@ -514,15 +659,22 @@ function App() {
                 </div>
 
                 <div>
-                  <span>SSL/TLS</span>
+
+                  <span>
+                    SSL/TLS
+                  </span>
 
                   <strong>
-                    {summary.ssl_enabled
-                      ? "Enabled"
-                      : ssl.enabled
+
+                    {
+                      summary.ssl_enabled ||
+                      ssl.enabled
                         ? "Enabled"
-                        : "Disabled"}
+                        : "Disabled"
+                    }
+
                   </strong>
+
                 </div>
 
               </div>
@@ -535,13 +687,19 @@ function App() {
                 </div>
 
                 <div>
-                  <span>CMS</span>
+
+                  <span>
+                    CMS
+                  </span>
 
                   <strong>
-                    {summary.cms_detected || cms.detected
-                      ? cms.name || "Detected"
+
+                    {cms.detected
+                      ? cms.name
                       : "Not Detected"}
+
                   </strong>
+
                 </div>
 
               </div>
@@ -549,9 +707,9 @@ function App() {
             </div>
 
 
-            {/* =====================
-                SECURITY FINDINGS
-            ===================== */}
+            {/* =================================================
+                FINDINGS
+            ================================================= */}
 
             <div className="findings-section">
 
@@ -563,73 +721,88 @@ function App() {
                 <div className="section-header">
 
                   <div>
+
                     <span className="section-kicker">
-                      SECURITY ANALYSIS
+                      SECURITY CONTROLS
                     </span>
 
                     <h2>
-                      Passed Security Checks
+                      Passed Checks
                     </h2>
+
                   </div>
 
-                  <span className="count-badge passed">
+
+                  <div className="count-badge passed">
+
                     {passedChecks.length}
-                  </span>
+
+                  </div>
 
                 </div>
 
 
-                {passedChecks.length === 0 && (
-                  <div className="empty-card">
-                    No passed checks were reported.
-                  </div>
-                )}
+                {passedChecks.length > 0 ? (
+
+                  passedChecks.map(
+                    (check, index) => (
+
+                      <div
+                        className="finding-card passed-card"
+                        key={`passed-${index}`}
+                      >
+
+                        <div className="finding-status">
+                          ✓
+                        </div>
 
 
-                {passedChecks.map(
-                  (check, index) => (
+                        <div className="finding-content">
 
-                    <div
-                      className="finding-card passed-card"
-                      key={index}
-                    >
+                          <div className="finding-title-row">
 
-                      <div className="finding-status">
-                        ✓
-                      </div>
+                            <h3>
+                              {check.header}
+                            </h3>
 
-                      <div className="finding-content">
 
-                        <div className="finding-title-row">
-
-                          <h3>
-                            {check.header ||
-                              check.name ||
-                              "Security Check"}
-                          </h3>
-
-                          {check.severity && (
                             <span
-                              className={`severity ${String(
-                                check.severity
-                              ).toLowerCase()}`}
+                              className={
+                                `severity ${
+                                  (
+                                    check.severity ||
+                                    "low"
+                                  ).toLowerCase()
+                                }`
+                              }
                             >
+
                               {check.severity}
+
                             </span>
-                          )}
+
+                          </div>
+
+
+                          <p>
+                            {check.description}
+                          </p>
 
                         </div>
 
-                        <p>
-                          {check.description ||
-                            "Security check passed successfully."}
-                        </p>
-
                       </div>
 
-                    </div>
-
+                    )
                   )
+
+                ) : (
+
+                  <div className="empty-card">
+
+                    No security controls passed.
+
+                  </div>
+
                 )}
 
               </div>
@@ -642,88 +815,105 @@ function App() {
                 <div className="section-header">
 
                   <div>
+
                     <span className="section-kicker">
-                      SECURITY ANALYSIS
+                      SECURITY CONTROLS
                     </span>
 
                     <h2>
-                      Failed Security Checks
+                      Failed Checks
                     </h2>
+
                   </div>
 
-                  <span className="count-badge failed">
+
+                  <div className="count-badge failed">
+
                     {failedChecks.length}
-                  </span>
+
+                  </div>
 
                 </div>
 
 
-                {failedChecks.length === 0 && (
-                  <div className="empty-card success-empty">
-                    No failed security checks found.
-                  </div>
-                )}
+                {failedChecks.length > 0 ? (
+
+                  failedChecks.map(
+                    (check, index) => (
+
+                      <div
+                        className="finding-card failed-card"
+                        key={`failed-${index}`}
+                      >
+
+                        <div className="finding-status">
+                          !
+                        </div>
 
 
-                {failedChecks.map(
-                  (check, index) => (
+                        <div className="finding-content">
 
-                    <div
-                      className="finding-card failed-card"
-                      key={index}
-                    >
+                          <div className="finding-title-row">
 
-                      <div className="finding-status">
-                        !
-                      </div>
+                            <h3>
+                              {check.header}
+                            </h3>
 
-                      <div className="finding-content">
 
-                        <div className="finding-title-row">
-
-                          <h3>
-                            {check.header ||
-                              check.name ||
-                              "Security Check"}
-                          </h3>
-
-                          {check.severity && (
                             <span
-                              className={`severity ${String(
-                                check.severity
-                              ).toLowerCase()}`}
+                              className={
+                                `severity ${
+                                  (
+                                    check.severity ||
+                                    "low"
+                                  ).toLowerCase()
+                                }`
+                              }
                             >
+
                               {check.severity}
+
                             </span>
+
+                          </div>
+
+
+                          <p>
+                            {check.description}
+                          </p>
+
+
+                          {check.recommendation && (
+
+                            <div className="recommendation">
+
+                              <strong>
+                                Recommendation
+                              </strong>
+
+                              <span>
+                                {check.recommendation}
+                              </span>
+
+                            </div>
+
                           )}
 
                         </div>
 
-                        <p>
-                          {check.description ||
-                            "This security check failed."}
-                        </p>
-
-
-                        {check.recommendation && (
-                          <div className="recommendation">
-
-                            <strong>
-                              Recommendation:
-                            </strong>
-
-                            <span>
-                              {check.recommendation}
-                            </span>
-
-                          </div>
-                        )}
-
                       </div>
 
-                    </div>
-
+                    )
                   )
+
+                ) : (
+
+                  <div className="empty-card success-empty">
+
+                    No failed security controls detected.
+
+                  </div>
+
                 )}
 
               </div>
@@ -731,9 +921,9 @@ function App() {
             </div>
 
 
-            {/* =====================
-                SSL + CMS
-            ===================== */}
+            {/* =================================================
+                SSL + CMS DETAILS
+            ================================================= */}
 
             <div className="details-grid">
 
@@ -745,25 +935,34 @@ function App() {
                 <div className="details-header">
 
                   <div>
+
                     <span className="section-kicker">
-                      CERTIFICATE
+                      TRANSPORT SECURITY
                     </span>
 
                     <h2>
-                      SSL/TLS Certificate
+                      SSL / TLS
                     </h2>
+
                   </div>
+
 
                   <span
                     className={
-                      ssl.enabled && ssl.valid
-                        ? "detail-status secure"
-                        : "detail-status danger"
+                      `detail-status ${
+                        ssl.enabled &&
+                        ssl.valid
+                          ? "secure"
+                          : "danger"
+                      }`
                     }
                   >
-                    {ssl.enabled && ssl.valid
-                      ? "Valid"
-                      : "Issue"}
+
+                    {ssl.enabled &&
+                    ssl.valid
+                      ? "Secure"
+                      : "Not Secure"}
+
                   </span>
 
                 </div>
@@ -772,49 +971,85 @@ function App() {
                 <div className="details-list">
 
                   <div>
-                    <span>Status</span>
+
+                    <span>
+                      Enabled
+                    </span>
 
                     <strong>
                       {ssl.enabled
-                        ? "Enabled"
-                        : "Disabled"}
+                        ? "Yes"
+                        : "No"}
                     </strong>
+
                   </div>
 
 
                   <div>
-                    <span>Issuer</span>
+
+                    <span>
+                      Valid
+                    </span>
 
                     <strong>
-                      {ssl.issuer || "Unknown"}
+                      {ssl.valid
+                        ? "Yes"
+                        : "No"}
                     </strong>
+
                   </div>
 
 
                   <div>
-                    <span>Subject</span>
+
+                    <span>
+                      Issuer
+                    </span>
 
                     <strong>
-                      {ssl.subject || "Unknown"}
+                      {ssl.issuer || "N/A"}
                     </strong>
+
                   </div>
 
 
                   <div>
-                    <span>Expires</span>
+
+                    <span>
+                      Subject
+                    </span>
 
                     <strong>
-                      {ssl.expires || "Unknown"}
+                      {ssl.subject || "N/A"}
                     </strong>
+
                   </div>
 
 
                   <div>
-                    <span>Days Remaining</span>
+
+                    <span>
+                      Expires
+                    </span>
 
                     <strong>
-                      {ssl.days_remaining ?? "N/A"}
+                      {ssl.expires || "N/A"}
                     </strong>
+
+                  </div>
+
+
+                  <div>
+
+                    <span>
+                      Days Remaining
+                    </span>
+
+                    <strong>
+                      {ssl.days_remaining ??
+                        "N/A"}
+                    </strong>
+
                   </div>
 
                 </div>
@@ -829,25 +1064,32 @@ function App() {
                 <div className="details-header">
 
                   <div>
+
                     <span className="section-kicker">
-                      TECHNOLOGY
+                      TECHNOLOGY DETECTION
                     </span>
 
                     <h2>
                       CMS Detection
                     </h2>
+
                   </div>
+
 
                   <span
                     className={
-                      cms.detected
-                        ? "detail-status detected"
-                        : "detail-status neutral"
+                      `detail-status ${
+                        cms.detected
+                          ? "detected"
+                          : "neutral"
+                      }`
                     }
                   >
+
                     {cms.detected
                       ? "Detected"
                       : "Not Detected"}
+
                   </span>
 
                 </div>
@@ -856,21 +1098,50 @@ function App() {
                 <div className="details-list">
 
                   <div>
-                    <span>CMS</span>
+
+                    <span>
+                      Detected
+                    </span>
 
                     <strong>
-                      {cms.name || "Unknown"}
+
+                      {cms.detected
+                        ? "Yes"
+                        : "No"}
+
                     </strong>
+
                   </div>
 
 
                   <div>
-                    <span>Version</span>
+
+                    <span>
+                      CMS
+                    </span>
 
                     <strong>
-                      {cms.version ||
-                        "Not detected"}
+
+                      {cms.name || "Unknown"}
+
                     </strong>
+
+                  </div>
+
+
+                  <div>
+
+                    <span>
+                      Version
+                    </span>
+
+                    <strong>
+
+                      {cms.version ||
+                        "Not available"}
+
+                    </strong>
+
                   </div>
 
                 </div>
@@ -880,10 +1151,9 @@ function App() {
             </div>
 
 
-            {/* =====================
-                EXECUTIVE
-                RECOMMENDATION
-            ===================== */}
+            {/* =================================================
+                EXECUTIVE RECOMMENDATION
+            ================================================= */}
 
             <div className="recommendation-card">
 
@@ -891,19 +1161,24 @@ function App() {
                 💡
               </div>
 
+
               <div>
 
                 <span className="section-kicker">
-                  NEXT STEPS
+                  EXECUTIVE SUMMARY
                 </span>
 
+
                 <h2>
-                  Executive Recommendation
+                  Security Recommendation
                 </h2>
 
+
                 <p>
+
                   {summary.recommendation ||
-                    "Review the failed security checks and apply the recommended security controls."}
+                    "No immediate issues detected."}
+
                 </p>
 
               </div>
@@ -911,40 +1186,48 @@ function App() {
             </div>
 
 
-            {/* =====================
+            {/* =================================================
                 SCAN INFORMATION
-            ===================== */}
+            ================================================= */}
 
             <div className="scan-information">
 
               <span>
-                Scan ID: {scanId}
+
+                Scan URL: {result.url}
+
               </span>
 
+
               <span>
-                ✓ Scan completed successfully
+
+                Scan Time:{" "}
+
+                {result.timestamp || "N/A"}
+
               </span>
 
             </div>
 
           </section>
+
         )}
 
       </main>
 
 
-      {/* =========================
+      {/* =====================================================
           FOOTER
-      ========================= */}
+      ===================================================== */}
 
       <footer>
 
         <p>
-          VulnScan Lite — Passive Web Security Scanner
+          VulnScan Lite
         </p>
 
         <span>
-          Security analysis for authorized websites
+          Passive Web Vulnerability Scanner
         </span>
 
       </footer>

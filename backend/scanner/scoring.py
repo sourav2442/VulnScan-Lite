@@ -1,7 +1,10 @@
 def calculate_score(passed, total):
     """
-    Calculate security score and grade.
+    Calculate the security header score and grade.
     """
+
+    if total <= 0:
+        return 0, "F"
 
     score = round((passed / total) * 100)
 
