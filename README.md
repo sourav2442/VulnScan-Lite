@@ -226,3 +226,13 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 **Sourav**
 
 GitHub: https://github.com/sourav2442
+
+## Future Improvements
+
+- **Gauge Interface:** The current security score gauge is an initial implementation. A more appropriate, accurate, and visually refined gauge interface will be implemented in a future update of VulnScan Lite.
+- Expand vulnerability checks and security header coverage.
+- Improve CMS and technology detection.
+- Add more detailed reporting and export options.
+- Improve scan performance and background job handling.
+- Enhance the user interface and overall dashboard experience.
+
