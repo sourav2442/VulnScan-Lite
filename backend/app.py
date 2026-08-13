@@ -1,24 +1,55 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from celery.result import AsyncResult
-from celery_app import celery
-from tasks.scan_tasks import scan_website
+from threading import Thread
+from uuid import uuid4
 
-from scanner.url_validator import validate_and_normalize_url
-
+from scanner.scanner_engine import run_scan
 
 # =========================================================
 # FLASK APPLICATION
 # =========================================================
 
 app = Flask(__name__)
-
-# Allow the React frontend to communicate with Flask
 CORS(app)
+
+# =========================================================
+# IN-MEMORY SCAN STORAGE
+# =========================================================
+
+scan_jobs = {}
 
 
 # =========================================================
-# HOME ROUTE
+# BACKGROUND SCAN WORKER
+# =========================================================
+
+def execute_scan(scan_id, url):
+    """
+    Run the vulnerability scan in a background thread.
+    """
+
+    try:
+        scan_jobs[scan_id]["status"] = "running"
+
+        result = run_scan(url)
+
+        if result.get("success"):
+            scan_jobs[scan_id]["status"] = "completed"
+            scan_jobs[scan_id]["result"] = result
+        else:
+            scan_jobs[scan_id]["status"] = "failed"
+            scan_jobs[scan_id]["error"] = result.get(
+                "error",
+                "Scan failed."
+            )
+
+    except Exception as exc:
+        scan_jobs[scan_id]["status"] = "failed"
+        scan_jobs[scan_id]["error"] = str(exc)
+
+
+# =========================================================
+# HOME
 # =========================================================
 
 @app.route("/", methods=["GET"])
@@ -38,49 +69,67 @@ def home():
 def start_scan():
 
     try:
+        data = request.get_json(silent=True)
 
-        # -------------------------------------------------
-        # Read JSON request
-        # -------------------------------------------------
-
-        data = request.get_json(silent=True) or {}
-
-        url = data.get("url", "")
-
-        # -------------------------------------------------
-        # Validate and normalize URL
-        # -------------------------------------------------
-
-        normalized_url, validation_error = (
-            validate_and_normalize_url(url)
-        )
-
-        if validation_error:
-
+        if not data:
             return jsonify({
                 "success": False,
-                "error": validation_error
+                "error": "Request body is required."
+            }), 400
+
+        url = data.get("url", "").strip()
+
+        if not url:
+            return jsonify({
+                "success": False,
+                "error": "URL is required."
             }), 400
 
         # -------------------------------------------------
-        # Create background scan job
+        # Normalize URL
         # -------------------------------------------------
 
-        task = scan_website.delay(normalized_url)
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
 
         # -------------------------------------------------
-        # Return scan ID
+        # Generate scan ID
         # -------------------------------------------------
+
+        scan_id = str(uuid4())
+
+        # -------------------------------------------------
+        # Create job
+        # -------------------------------------------------
+
+        scan_jobs[scan_id] = {
+            "status": "queued",
+            "result": None,
+            "error": None,
+            "url": url
+        }
+
+        # -------------------------------------------------
+        # Start background scan
+        # -------------------------------------------------
+
+        worker = Thread(
+            target=execute_scan,
+            args=(scan_id, url),
+            daemon=True
+        )
+
+        worker.start()
 
         return jsonify({
             "success": True,
-            "scan_id": task.id,
+            "scan_id": scan_id,
             "status": "queued"
         }), 200
 
-    except Exception as e:
+    except Exception as exc:
 
-        print("START SCAN ERROR:", repr(e))
+        print("START SCAN ERROR:", exc)
 
         return jsonify({
             "success": False,
@@ -95,129 +144,90 @@ def start_scan():
 @app.route("/scan/<scan_id>/status", methods=["GET"])
 def scan_status(scan_id):
 
-    try:
+    job = scan_jobs.get(scan_id)
 
-        # -------------------------------------------------
-        # Get Celery task
-        # -------------------------------------------------
+    if not job:
+        return jsonify({
+            "success": False,
+            "error": "Scan job not found."
+        }), 404
 
-        task = AsyncResult(scan_id, app=celery)
+    # -----------------------------------------------------
+    # QUEUED
+    # -----------------------------------------------------
 
-        # -------------------------------------------------
-        # Task completed
-        # -------------------------------------------------
-
-        if task.successful():
-
-            result = task.result
-
-            # Safety check
-            if not isinstance(result, dict):
-
-                return jsonify({
-                    "success": False,
-                    "status": "failed",
-                    "error": "Invalid scan result returned by worker."
-                }), 500
-
-            # Scanner itself may report success=False
-            if result.get("success") is False:
-
-                return jsonify({
-                    "success": False,
-                    "status": "failed",
-                    "error": result.get(
-                        "error",
-                        "Scan failed."
-                    )
-                }), 200
-
-            return jsonify({
-                "success": True,
-                "status": "completed",
-                "result": result
-            }), 200
-
-        # -------------------------------------------------
-        # Task failed
-        # -------------------------------------------------
-
-        if task.failed():
-
-            return jsonify({
-                "success": False,
-                "status": "failed",
-                "error": "Scan worker failed."
-            }), 500
-
-        # -------------------------------------------------
-        # Task is still running
-        # -------------------------------------------------
-
-        if task.state in ("PENDING", "RECEIVED"):
-
-            return jsonify({
-                "success": True,
-                "status": "queued"
-            }), 200
-
-        if task.state in ("STARTED", "RETRY"):
-
-            return jsonify({
-                "success": True,
-                "status": "running"
-            }), 200
-
-        # -------------------------------------------------
-        # Unknown Celery state
-        # -------------------------------------------------
+    if job["status"] == "queued":
 
         return jsonify({
             "success": True,
-            "status": task.state.lower()
+            "status": "queued"
         }), 200
 
-    except Exception as e:
+    # -----------------------------------------------------
+    # RUNNING
+    # -----------------------------------------------------
 
-        print("SCAN STATUS ERROR:", repr(e))
+    if job["status"] == "running":
+
+        return jsonify({
+            "success": True,
+            "status": "running"
+        }), 200
+
+    # -----------------------------------------------------
+    # FAILED
+    # -----------------------------------------------------
+
+    if job["status"] == "failed":
 
         return jsonify({
             "success": False,
             "status": "failed",
-            "error": "Unable to retrieve scan status."
-        }), 500
+            "error": job.get(
+                "error",
+                "Scan failed."
+            )
+        }), 200
 
+    # -----------------------------------------------------
+    # COMPLETED
+    # -----------------------------------------------------
 
-# =========================================================
-# ERROR HANDLERS
-# =========================================================
+    if job["status"] == "completed":
 
-@app.errorhandler(404)
-def not_found(error):
+        return jsonify({
+            "success": True,
+            "status": "completed",
+            "result": job["result"]
+        }), 200
+
+    # -----------------------------------------------------
+    # UNKNOWN
+    # -----------------------------------------------------
 
     return jsonify({
         "success": False,
-        "error": "API endpoint not found."
-    }), 404
-
-
-@app.errorhandler(405)
-def method_not_allowed(error):
-
-    return jsonify({
-        "success": False,
-        "error": "HTTP method not allowed."
-    }), 405
+        "status": "unknown",
+        "error": "Unknown scan status."
+    }), 500
 
 
 # =========================================================
-# RUN APPLICATION
+# RUN SERVER
 # =========================================================
 
 if __name__ == "__main__":
 
+    print("=" * 60)
+    print("VULNSCAN LITE")
+    print("Passive Web Vulnerability Scanner")
+    print("=" * 60)
+    print("Backend: http://127.0.0.1:5001")
+    print("=" * 60)
+
     app.run(
         host="127.0.0.1",
         port=5001,
-        debug=True
+        debug=True,
+        use_reloader=False
     )
